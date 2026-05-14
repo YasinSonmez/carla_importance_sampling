@@ -156,29 +156,3 @@ ls runs/pid_gap_maps/pid_map_extra_dense_full_20260513/inverse_map.csv
   --seed 789
 ```
 
-## 4) Publish-ready results folder
-
-The finalized experiment artifacts (logs excluded) are packaged in:
-
-```bash
-results/full_suite_20260513
-```
-
-Summary file:
-
-```bash
-cat results/full_suite_20260513/RESULTS_SUMMARY.md
-```
-
-## 5) Publish as standalone repository root
-
-This folder can be used directly as the repository root (`standalone_carla_acc` only).
-
-```bash
-git init
-git add .
-git commit -m "Standalone CARLA ACC package with full-suite results"
-git branch -M main
-git remote add origin <your-new-repo-url>
-git push -u origin main
-```
