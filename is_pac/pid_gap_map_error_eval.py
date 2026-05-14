@@ -7,14 +7,16 @@ Workflow:
 - Sample off-grid test conditions (continuous v_lead_target, d_target_final).
 - Interpolate required d_init from the inverse map.
 - Run CARLA trial with PID speed control and measured settle condition.
-- Report error e = d_final_measured - d_target_final.
+- Report distance error e_d = d_final_measured - d_target_final.
+- Report relative-speed error e_v = (v_rel_final - v_rel_target), where
+    v_rel = v_lead - v_ego.
 
 Outputs:
 - eval_trials.csv
 - eval_summary.json
-- eval_error_hist.png
-- eval_error_vs_target.png
-- eval_error_vs_speed.png
+- eval_error_hist.png (2 subplots: distance, velocity)
+- eval_error_vs_target.png (2 subplots: distance, velocity)
+- eval_error_vs_speed.png (2 subplots: distance, velocity)
 """
 
 from __future__ import annotations
@@ -77,6 +79,12 @@ class EvalCase:
     final_gap_m: float
     gap_error_m: float
     abs_gap_error_m: float
+    final_lead_speed_mps: float
+    final_ego_speed_mps: float
+    target_rel_speed_mps: float
+    final_rel_speed_mps: float
+    rel_speed_error_mps: float
+    abs_rel_speed_error_mps: float
     settled: bool
     collision: bool
     spawn_ok: bool
@@ -246,32 +254,55 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _plot_hist(path: Path, errors: np.ndarray) -> None:
+def _plot_hist(path: Path, gap_errors: np.ndarray, rel_speed_errors: np.ndarray) -> None:
     if plt is None:
         return
-    fig, ax = plt.subplots(figsize=(9.5, 5.5), dpi=160)
-    ax.hist(errors, bins=30, color="#1f77b4", alpha=0.85)
-    ax.axvline(0.0, color="black", linestyle="--", linewidth=1.0)
-    ax.set_title("Gap Error Histogram (d_final - d_target)")
-    ax.set_xlabel("Gap error [m]")
-    ax.set_ylabel("Count")
-    ax.grid(alpha=0.25)
+    fig, axes = plt.subplots(2, 1, figsize=(9.5, 8.8), dpi=160)
+
+    axes[0].hist(gap_errors, bins=30, color="#1f77b4", alpha=0.85)
+    axes[0].axvline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[0].set_title("Distance Error Histogram (d_final - d_target)")
+    axes[0].set_xlabel("Distance error [m]")
+    axes[0].set_ylabel("Count")
+    axes[0].grid(alpha=0.25)
+
+    axes[1].hist(rel_speed_errors, bins=30, color="#ff7f0e", alpha=0.85)
+    axes[1].axvline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[1].set_title("Relative-Speed Error Histogram (v_rel_final - v_rel_target)")
+    axes[1].set_xlabel("Velocity error [m/s]")
+    axes[1].set_ylabel("Count")
+    axes[1].grid(alpha=0.25)
+
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
 
 
-def _plot_scatter(path: Path, x: np.ndarray, y: np.ndarray, title: str, xlabel: str) -> None:
+def _plot_scatter(
+    path: Path,
+    x: np.ndarray,
+    gap_err: np.ndarray,
+    rel_speed_err: np.ndarray,
+    title: str,
+    xlabel: str,
+) -> None:
     if plt is None:
         return
-    fig, ax = plt.subplots(figsize=(9.5, 5.5), dpi=160)
-    ax.scatter(x, y, s=20, alpha=0.75)
-    ax.axhline(0.0, color="black", linestyle="--", linewidth=1.0)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Gap error [m]")
-    ax.grid(alpha=0.25)
-    fig.tight_layout()
+    fig, axes = plt.subplots(2, 1, figsize=(9.5, 8.8), dpi=160, sharex=True)
+
+    axes[0].scatter(x, gap_err, s=20, alpha=0.75)
+    axes[0].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[0].set_ylabel("Distance error [m]")
+    axes[0].grid(alpha=0.25)
+
+    axes[1].scatter(x, rel_speed_err, s=20, alpha=0.75, color="#ff7f0e")
+    axes[1].axhline(0.0, color="black", linestyle="--", linewidth=1.0)
+    axes[1].set_xlabel(xlabel)
+    axes[1].set_ylabel("Velocity error [m/s]")
+    axes[1].grid(alpha=0.25)
+
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
     fig.savefig(path)
     plt.close(fig)
 
@@ -439,6 +470,17 @@ def main() -> None:
                 e = float("nan")
                 ae = float("nan")
 
+            if np.isfinite(tr.final_lead_speed_mps) and np.isfinite(tr.final_ego_speed_mps):
+                target_rel_speed = float(v_lead - args.ego_target_speed)
+                final_rel_speed = float(tr.final_lead_speed_mps - tr.final_ego_speed_mps)
+                v_err = float(final_rel_speed - target_rel_speed)
+                av_err = float(abs(v_err))
+            else:
+                target_rel_speed = float("nan")
+                final_rel_speed = float("nan")
+                v_err = float("nan")
+                av_err = float("nan")
+
             eval_rows.append(
                 EvalCase(
                     case_idx=i,
@@ -448,6 +490,12 @@ def main() -> None:
                     final_gap_m=float(tr.final_gap_m),
                     gap_error_m=e,
                     abs_gap_error_m=ae,
+                    final_lead_speed_mps=float(tr.final_lead_speed_mps),
+                    final_ego_speed_mps=float(tr.final_ego_speed_mps),
+                    target_rel_speed_mps=target_rel_speed,
+                    final_rel_speed_mps=final_rel_speed,
+                    rel_speed_error_mps=v_err,
+                    abs_rel_speed_error_mps=av_err,
                     settled=bool(tr.settled),
                     collision=bool(tr.collision),
                     spawn_ok=bool(tr.spawn_ok),
@@ -482,6 +530,12 @@ def main() -> None:
                 "final_gap_m",
                 "gap_error_m",
                 "abs_gap_error_m",
+                "final_lead_speed_mps",
+                "final_ego_speed_mps",
+                "target_rel_speed_mps",
+                "final_rel_speed_mps",
+                "rel_speed_error_mps",
+                "abs_rel_speed_error_mps",
                 "settled",
                 "collision",
                 "spawn_ok",
@@ -500,6 +554,12 @@ def main() -> None:
                     "final_gap_m": r.final_gap_m,
                     "gap_error_m": r.gap_error_m,
                     "abs_gap_error_m": r.abs_gap_error_m,
+                    "final_lead_speed_mps": r.final_lead_speed_mps,
+                    "final_ego_speed_mps": r.final_ego_speed_mps,
+                    "target_rel_speed_mps": r.target_rel_speed_mps,
+                    "final_rel_speed_mps": r.final_rel_speed_mps,
+                    "rel_speed_error_mps": r.rel_speed_error_mps,
+                    "abs_rel_speed_error_mps": r.abs_rel_speed_error_mps,
                     "settled": int(r.settled),
                     "collision": int(r.collision),
                     "spawn_ok": int(r.spawn_ok),
@@ -511,6 +571,8 @@ def main() -> None:
     good = [r for r in eval_rows if r.settled and (not r.collision) and np.isfinite(r.gap_error_m)]
     errs = np.asarray([r.gap_error_m for r in good], dtype=float)
     abs_errs = np.abs(errs)
+    vel_errs = np.asarray([r.rel_speed_error_mps for r in good if np.isfinite(r.rel_speed_error_mps)], dtype=float)
+    abs_vel_errs = np.abs(vel_errs)
 
     summary: Dict[str, Any] = {
         "timestamp_start": started,
@@ -531,23 +593,38 @@ def main() -> None:
         "p90_abs_err_m": _nan_to_none(float(np.percentile(abs_errs, 90.0))) if abs_errs.size > 0 else None,
         "p95_abs_err_m": _nan_to_none(float(np.percentile(abs_errs, 95.0))) if abs_errs.size > 0 else None,
         "max_abs_err_m": _nan_to_none(float(np.max(abs_errs))) if abs_errs.size > 0 else None,
+        "vel_mae_mps": _nan_to_none(float(np.mean(abs_vel_errs))) if abs_vel_errs.size > 0 else None,
+        "vel_rmse_mps": _nan_to_none(float(np.sqrt(np.mean(vel_errs * vel_errs)))) if vel_errs.size > 0 else None,
+        "vel_bias_mps": _nan_to_none(float(np.mean(vel_errs))) if vel_errs.size > 0 else None,
+        "vel_median_abs_err_mps": _nan_to_none(float(np.median(abs_vel_errs))) if abs_vel_errs.size > 0 else None,
+        "vel_p90_abs_err_mps": _nan_to_none(float(np.percentile(abs_vel_errs, 90.0))) if abs_vel_errs.size > 0 else None,
+        "vel_p95_abs_err_mps": _nan_to_none(float(np.percentile(abs_vel_errs, 95.0))) if abs_vel_errs.size > 0 else None,
+        "vel_max_abs_err_mps": _nan_to_none(float(np.max(abs_vel_errs))) if abs_vel_errs.size > 0 else None,
         "eval_csv": str(eval_csv),
     }
 
-    if plt is not None and abs_errs.size > 0:
-        _plot_hist(out_root / "eval_error_hist.png", errs)
+    if plt is not None and abs_errs.size > 0 and abs_vel_errs.size > 0:
+        good_plot = [r for r in good if np.isfinite(r.rel_speed_error_mps)]
+        x_gap = np.asarray([r.target_final_gap_m for r in good_plot], dtype=float)
+        x_speed = np.asarray([r.lead_target_speed_mps for r in good_plot], dtype=float)
+        gap_err_plot = np.asarray([r.gap_error_m for r in good_plot], dtype=float)
+        vel_err_plot = np.asarray([r.rel_speed_error_mps for r in good_plot], dtype=float)
+
+        _plot_hist(out_root / "eval_error_hist.png", gap_err_plot, vel_err_plot)
         _plot_scatter(
             out_root / "eval_error_vs_target.png",
-            np.asarray([r.target_final_gap_m for r in good], dtype=float),
-            errs,
-            title="Gap Error vs Target Gap",
+            x_gap,
+            gap_err_plot,
+            vel_err_plot,
+            title="Error vs Target Gap",
             xlabel="Target final gap [m]",
         )
         _plot_scatter(
             out_root / "eval_error_vs_speed.png",
-            np.asarray([r.lead_target_speed_mps for r in good], dtype=float),
-            errs,
-            title="Gap Error vs Lead Target Speed",
+            x_speed,
+            gap_err_plot,
+            vel_err_plot,
+            title="Error vs Lead Target Speed",
             xlabel="Lead target speed [m/s]",
         )
 
@@ -562,6 +639,10 @@ def main() -> None:
         print(f"MAE: {float(np.mean(abs_errs)):.4f} m")
         print(f"RMSE: {float(np.sqrt(np.mean(errs * errs))):.4f} m")
         print(f"P95 |error|: {float(np.percentile(abs_errs, 95.0)):.4f} m")
+    if abs_vel_errs.size > 0:
+        print(f"Velocity MAE: {float(np.mean(abs_vel_errs)):.4f} m/s")
+        print(f"Velocity RMSE: {float(np.sqrt(np.mean(vel_errs * vel_errs))):.4f} m/s")
+        print(f"Velocity P95 |error|: {float(np.percentile(abs_vel_errs, 95.0)):.4f} m/s")
     print(f"Eval CSV: {eval_csv}")
     print(f"Summary: {out_root / 'eval_summary.json'}")
 
